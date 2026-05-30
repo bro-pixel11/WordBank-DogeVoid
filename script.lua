@@ -1,234 +1,764 @@
 --[[
+
     Word Bank DogeVoid
-    Stable Probability Auto Search
+
+    FLOW-BASED CATEGORY SYSTEM
+
+    v5: Optimized Performance + Category Cache
+
 ]]
 
-local wordsfile = nil
+ 
 getgenv().deletewhendupefound = true
 
-print("loading lib")
+ 
+print("[STARTUP] Loading lib...")
 
+ 
 local lib =
+
 loadstring(game:HttpGet("https://rawscripts.net/raw/Universal-Script-Lib-18698"))()
 
-print("done loading lib")
+ 
+print("[STARTUP] Lib loaded")
 
+ 
+task.wait(1)
+
+ 
 lib.makelib("Word Bank DogeVoid")
 
+ 
 local main = lib.maketab("Main")
 
+ 
 local labelstatus =
-lib.makelabel("Loading... (This may take ~1 minute)", main)
 
-pcall(function()
-    wordsfile = readfile("ALLWORDSFILE.txt")
-end)
+lib.makelabel("Loading Fioso Dictionary...", main)
 
-local ALLWORDS = nil
+ 
+print("[STARTUP] Starting dictionary load...")
 
-if wordsfile ~= nil then
+ 
+local ALLWORDS =
 
-    ALLWORDS = wordsfile
+game:HttpGet("https://raw.githubusercontent.com/bro-pixel11/dogevoid-dictionary/main/ALLWORDSFILE.txt")
 
-    lib.updatelabel(
-        "Got Words from Workspace!",
-        labelstatus
-    )
+ 
+print("[STARTUP] Dictionary loaded, size: " .. #ALLWORDS)
 
-else
+ 
+lib.updatelabel(
 
-    lib.updatelabel(
-        "Loading Words from Internet",
-        labelstatus
-    )
+    "Loaded Fioso Dictionary!",
 
-    ALLWORDS =
-    game:HttpGet(
-        "https://raw.githubusercontent.com/dwyl/english-words/master/words_alpha.txt"
-    )
+    labelstatus
 
-    writefile("ALLWORDSFILE.txt", ALLWORDS)
-end
+)
 
-lib.updatelabel("Done Loading!", labelstatus)
-
+ 
 local words =
+
 string.split(ALLWORDS, "\n")
 
-local numtopick = 1
+ 
+print("[STARTUP] Words split, count: " .. #words)
 
-lib.maketextbox("# To Pick", main, function(num)
-    numtopick = tonumber(num) or 1
-end)
+ 
+-- === BUILD CATEGORY CACHE (ONE TIME) ===
 
-local lettercap = math.huge
+ 
+print("[CACHE] Building category cache...")
 
-lib.maketextbox("Letter Cap", main, function(num)
-    lettercap = tonumber(num) or math.huge
-end)
+ 
+local categoryCache = {}
 
-local lastcontains = ""
-local labelword
+ 
+local smoothFlowWords = {
 
-local numclose = .001
+    "SUPERCALIFRAGILISTICEXPIALIDOCIOUS",
 
-local function probability(word)
+    "FLOCCINAUCINIHILIPILIFICATION",
 
-    local score = 0
+    "PSEUDOPSEUDOHYPOPARATHYROIDISM",
 
-    local rare = {
-        q = 25,
-        z = 20,
-        x = 18,
-        j = 16,
-        k = 12,
-        v = 8
-    }
+    "SPHENOPALATINEGANGLIONEURALGIA",
 
-    for i = 1, #word do
+    "PNEUMONOULTRAMICROSCOPICSILICOVOLCANOCONIOSIS",
 
-        local c =
-        word:sub(i, i):lower()
+    "HONORIFICABILITUDINITATIBUS",
 
-        score += rare[c] or 1
-    end
+    "ANTIDISESTABLISHMENTARIANISM",
 
-    score += #word * 2
+    "INCOMPREHENSIBILITY",
 
-    return score
+    "SESQUIPEDALIAN",
+
+    "INTERNATIONALIZATION",
+
+    "UNCHARACTERISTICALLY",
+
+    "UNCONSTITUTIONALLY",
+
+    "UNPREPOSSESSINGLY",
+
+    "INDEFATIGABLY",
+
+    "SUPERCILIOUSLY",
+
+    "OBSEQUIOUSNESS",
+
+    "PERSPICACIOUSLY",
+
+    "MAGNANIMOUSLY"
+
+}
+
+ 
+local awkwardReadableWords = {
+
+    "WHATCHAMACALLIT",
+
+    "THINGAMABOB",
+
+    "THINGAMAJIG",
+
+    "GOBBLEDYGOOK"
+
+}
+
+ 
+local medicalEndgameWords = {
+
+    "KERATOCONJUNCTIVITIDES",
+
+    "THROMBOPHLEBITIDES",
+
+    "OTORHINOLARYNGOLOGICAL",
+
+    "ELECTROENCEPHALOGRAPHER",
+
+    "DICHLORODIFLUOROMETHANE",
+
+    "ELECTROPHORETICALLY",
+
+    "IMMUNOELECTROPHORETICALLY"
+
+}
+
+ 
+-- Cache smooth flow
+
+for _, word in ipairs(smoothFlowWords) do
+
+    categoryCache[word] = "smoothFlow"
+
 end
 
-function copyword(bruteforce)
+ 
+-- Cache awkward
 
-    local gamecontainer =
-    game.Players.LocalPlayer.PlayerGui.GameUI.Container.GameSpace.DefaultUI.GameContainer
+for _, word in ipairs(awkwardReadableWords) do
 
-    if #gamecontainer.DesktopContainer.InfoFrameContainer:GetChildren() > 0 then
+    categoryCache[word] = "awkwardReadable"
 
-        gamecontainer =
-        gamecontainer.DesktopContainer.InfoFrameContainer.InfoFrame.TextFrame
+end
+
+ 
+-- Cache medical
+
+for _, word in ipairs(medicalEndgameWords) do
+
+    categoryCache[word] = "medicalEndgame"
+
+end
+
+ 
+print("[CACHE] Category cache built: " .. table.concat({
+
+    "smooth=" .. #smoothFlowWords,
+
+    "awkward=" .. #awkwardReadableWords,
+
+    "medical=" .. #medicalEndgameWords
+
+}, ", "))
+
+ 
+local sessionUsedWords = {}
+
+ 
+local numtopick = 1
+
+ 
+lib.maketextbox("# To Pick", main, function(num)
+
+    numtopick = tonumber(num) or 1
+
+end)
+
+ 
+local lettercap = math.huge
+
+ 
+lib.maketextbox("Letter Cap", main, function(num)
+
+    lettercap = tonumber(num) or math.huge
+
+end)
+
+ 
+local enableFallback = true
+
+ 
+lib.maketoggle("Enable Fallback", main, function(bool)
+
+    enableFallback = bool
+
+    print("[SETTINGS] Fallback: " .. (bool and "ON" or "OFF"))
+
+end)
+
+ 
+local lastcontains = ""
+
+local labelword
+
+ 
+local numclose = .001
+
+local function isAllCaps(word)
+
+    if not word then
+        return false
+    end
+
+    return word == word:upper() and word:match("[A-Z]")
+end
+
+-- === CHUNK CATEGORIES ===
+
+ 
+local ultraSafeChunks = {
+
+    ["li"] = true, ["un"] = true, ["re"] = true, ["ing"] = true,
+
+    ["tion"] = true, ["able"] = true, ["ment"] = true, ["ness"] = true,
+
+    ["less"] = true, ["ful"] = true, ["ly"] = true, ["er"] = true,
+
+    ["or"] = true, ["ous"] = true, ["al"] = true, ["ity"] = true,
+
+    ["sion"] = true, ["ance"] = true, ["ence"] = true, ["sup"] = true,
+
+    ["ion"] = true, ["pre"] = true, ["con"] = true, ["pro"] = true
+
+}
+
+ 
+local regularChunks = {
+
+    ["tra"] = true, ["trans"] = true, ["form"] = true, ["port"] = true,
+
+    ["script"] = true, ["graph"] = true, ["phone"] = true, ["logy"] = true,
+
+    ["path"] = true, ["scope"] = true, ["ent"] = true, ["inter"] = true,
+
+    ["over"] = true, ["under"] = true, ["the"] = true, ["and"] = true,
+
+    ["dis"] = true
+
+}
+
+ 
+local hardChunks = {
+
+    ["hox"] = true, ["bok"] = true, ["qal"] = true, ["kaw"] = true,
+
+    ["qaf"] = true, ["zho"] = true, ["qua"] = true, ["xan"] = true,
+
+    ["xylo"] = true, ["tzh"] = true, ["psych"] = true, ["kerato"] = true,
+
+    ["conjunctiv"] = true, ["phleb"] = true, ["enceph"] = true,
+
+    ["thromb"] = true, ["electro"] = true, ["oto"] = true, ["neuro"] = true
+
+}
+
+ 
+-- === SAFE UI FETCH ===
+
+ 
+
+local function getGameContainer()
+
+    local player = game.Players.LocalPlayer
+
+    if not player then
+        return nil
+    end
+
+    local playerGui = player:FindFirstChild("PlayerGui")
+
+    if not playerGui then
+        return nil
+    end
+
+    for _, obj in ipairs(playerGui:GetDescendants()) do
+
+        if obj.Name == "GameContainer" then
+            return obj
+        end
+
+    end
+
+    return nil
+end
+
+ 
+
+local function getTextFrame(gameContainer)
+
+    if not gameContainer then
+        return nil
+    end
+
+    for _, obj in ipairs(gameContainer:GetDescendants()) do
+
+        if obj.Name == "TextFrame" then
+
+            if obj:FindFirstChildWhichIsA("TextLabel", true) then
+                return obj
+            end
+
+        end
+
+    end
+
+    return nil
+end
+
+ local function getChunkDifficulty(chunk)
+
+    if hardChunks[chunk] then
+
+        return "hard"
+
+    elseif regularChunks[chunk] then
+
+        return "regular"
+
+    elseif ultraSafeChunks[chunk] then
+
+        return "ultraSafe"
 
     else
 
-        gamecontainer =
-        gamecontainer.Mobile.MobileContainer.InfoFrame.TextFrame
+        return "regular"
+
     end
 
-    local contains = ""
+end
 
-    for i,v in pairs(gamecontainer:GetChildren()) do
+ 
+-- O(1) CATEGORY LOOKUP (no loops, no upper calls)
 
-        if v:FindFirstChild("Letter") and v.Visible == true then
+local function getWordCategory(word)
 
-            local lettercolor =
-            v.Letter.ImageColor3
+    return categoryCache[word] or "neutral"
 
-            local lettercolor2 =
-            Color3.fromRGB(142,148,171)
+end
 
-            local lettercolor3 =
-            Color3.fromRGB(129,156,255)
+ 
+local function selectWord(foundwords, chunkDiff)
 
-            if
-            (
-                math.abs(lettercolor.R - lettercolor2.R) < numclose
-                and
-                math.abs(lettercolor.G - lettercolor2.G) < numclose
-                and
-                math.abs(lettercolor.B - lettercolor2.B) < numclose
-            )
-            or
-            (
-                math.abs(lettercolor.R - lettercolor3.R) < numclose
-                and
-                math.abs(lettercolor.G - lettercolor3.G) < numclose
-                and
-                math.abs(lettercolor.B - lettercolor3.B) < numclose
-            )
-            then
+    if not foundwords or #foundwords == 0 then 
 
-                contains =
-                contains .. v.Letter.TextLabel.Text
-            end
-        end
+        return nil 
+
     end
 
-    contains = contains:lower()
+ 
+    -- SPLIT BY CATEGORY (O(n) pass, but only once)
 
-    if contains == "" then
-        return
-    end
+    local smoothPool = {}
 
-    local finalword
+    local awkwardPool = {}
 
-    if lastcontains ~= contains or bruteforce then
+    local medicalPool = {}
 
-        lastcontains = contains
+    local neutralPool = {}
 
-        local foundwords = {}
+ 
+    for _, word in ipairs(foundwords) do
 
-        for i,v in pairs(words) do
+        local category = getWordCategory(word)
 
-            v = v:lower()
+ 
+        if category == "smoothFlow" then
 
-            if string.find(v, contains) and string.len(v) <= lettercap then
-                table.insert(foundwords, v)
-            end
-        end
+            table.insert(smoothPool, word)
 
-        table.sort(foundwords, function(a,b)
+        elseif category == "awkwardReadable" then
 
-            return probability(a) > probability(b)
+            table.insert(awkwardPool, word)
 
-        end)
+        elseif category == "medicalEndgame" then
 
-        finalword =
-        foundwords[numtopick]
-
-        if finalword then
-
-            setclipboard(finalword)
-
-            print(finalword)
-
-            lib.updatelabel(
-                finalword,
-                labelword
-            )
+            table.insert(medicalPool, word)
 
         else
 
-            lib.updatelabel(
-                "Word Not Found",
-                labelword
-            )
+            table.insert(neutralPool, word)
+
         end
+
     end
+
+ 
+    local selected = nil
+
+ 
+    if chunkDiff == "ultraSafe" then
+
+        local rand = math.random(100)
+
+        if rand <= 95 and #smoothPool > 0 then
+
+            selected = smoothPool[math.random(1, #smoothPool)]
+
+        elseif #neutralPool > 0 then
+
+            selected = neutralPool[math.random(1, #neutralPool)]
+
+        elseif #smoothPool > 0 then
+
+            selected = smoothPool[math.random(1, #smoothPool)]
+
+        end
+
+ 
+    elseif chunkDiff == "regular" then
+
+        local rand = math.random(100)
+
+        if rand <= 50 and #smoothPool > 0 then
+
+            selected = smoothPool[math.random(1, #smoothPool)]
+
+        elseif rand <= 80 and #awkwardPool > 0 then
+
+            selected = awkwardPool[math.random(1, #awkwardPool)]
+
+        elseif #neutralPool > 0 then
+
+            selected = neutralPool[math.random(1, #neutralPool)]
+
+        elseif #smoothPool > 0 then
+
+            selected = smoothPool[math.random(1, #smoothPool)]
+
+        end
+
+ 
+    else  -- hard
+
+        local rand = math.random(100)
+
+        if rand <= 70 and #medicalPool > 0 then
+
+            selected = medicalPool[math.random(1, #medicalPool)]
+
+        elseif rand <= 90 and #awkwardPool > 0 then
+
+            selected = awkwardPool[math.random(1, #awkwardPool)]
+
+        elseif #neutralPool > 0 then
+
+            selected = neutralPool[math.random(1, #neutralPool)]
+
+        elseif #medicalPool > 0 then
+
+            selected = medicalPool[math.random(1, #medicalPool)]
+
+        end
+
+    end
+
+ 
+    return selected
+
 end
 
-lib.makebutton("Search Word", main, function()
+ 
+-- === MAIN COPYWORD FUNCTION ===
+
+ 
+function copyword(bruteforce)
+
+    local success, err = pcall(function()
+
+     local gameContainer = getGameContainer()
+
+if not gameContainer then
+    lib.updatelabel("UI ERROR", labelword)
+    return
+end
+
+       local gamecontainer = getTextFrame(gameContainer)
+
+if not gamecontainer then
+
+    lib.updatelabel("UI ERROR", labelword)
+
+    return
+
+end
+ 
+local contains = ""
+
+ 
+      for i,v in pairs(gamecontainer:GetDescendants()) do
+
+          if v:FindFirstChild("Letter") and v:IsA("Frame") and v.Visible then
+
+               if not v.Letter:FindFirstChild("TextLabel") then
+    continue
+end
+
+local lettercolor = v.Letter.ImageColor3
+
+                local lettercolor2 = Color3.fromRGB(142,148,171)
+
+                local lettercolor3 = Color3.fromRGB(129,156,255)
+
+ 
+                if
+
+                (
+
+                    math.abs(lettercolor.R - lettercolor2.R) < numclose
+
+                    and
+
+                    math.abs(lettercolor.G - lettercolor2.G) < numclose
+
+                    and
+
+                    math.abs(lettercolor.B - lettercolor2.B) < numclose
+
+                )
+
+                or
+
+                (
+
+                    math.abs(lettercolor.R - lettercolor3.R) < numclose
+
+                    and
+
+                    math.abs(lettercolor.G - lettercolor3.G) < numclose
+
+                    and
+
+                    math.abs(lettercolor.B - lettercolor3.B) < numclose
+
+                )
+
+                then
+
+                    contains = contains .. v.Letter.TextLabel.Text
+
+                end
+
+            end
+
+        end
+
+ 
+        contains = contains:lower()
+
+ 
+        if contains == "" then
+
+            return
+
+        end
+
+ 
+        if lastcontains ~= contains or bruteforce then
+
+            lastcontains = contains
+
+ 
+            local chunkDiff = getChunkDifficulty(contains)
+
+ 
+            local foundwords = {}
+
+            for i = 1, #words do
+
+                local v = words[i]:lower()
+
+                if string.find(v, contains) and string.len(v) <= lettercap and not sessionUsedWords[v] then
+
+                    table.insert(foundwords, words[i])
+
+                end
+
+            end
+
+ 
+            if #foundwords == 0 then
+
+                lib.updatelabel("Word Not Found", labelword)
+
+                return
+
+            end
+
+ 
+            local lowercase_words = {}
+
+            local caps_words = {}
+
+ 
+            for _, word in ipairs(foundwords) do
+
+                if isAllCaps(word) then
+
+                    table.insert(caps_words, word)
+
+                else
+
+                    table.insert(lowercase_words, word)
+
+                end
+
+            end
+
+ 
+            local finalword = nil
+
+            local tier = "BALANCED"
+
+ 
+            if math.random(100) <= 60 then
+
+                if #lowercase_words > 0 then
+
+                    finalword = selectWord(lowercase_words, chunkDiff)
+
+                    tier = "60% SHORT"
+
+                elseif #caps_words > 0 and enableFallback then
+
+                    finalword = selectWord(caps_words, chunkDiff)
+
+                    tier = "FALLBACK CAPS"
+
+                end
+
+            else
+
+                if #caps_words > 0 then
+
+                    finalword = selectWord(caps_words, chunkDiff)
+
+                    tier = "40% CAPS"
+
+                elseif #lowercase_words > 0 and enableFallback then
+
+                    finalword = selectWord(lowercase_words, chunkDiff)
+
+                    tier = "FALLBACK SHORT"
+
+                end
+
+            end
+
+ 
+            if finalword then
+
+                sessionUsedWords[finalword:lower()] = true
+
+                lib.updatelabel(finalword .. " [" .. tier .. "]", labelword)
+
+            else
+
+                lib.updatelabel("Word Not Found", labelword)
+
+            end
+
+        end
+
+    end)
+
+ 
+    if not success then
+
+        print("[ERROR] " .. tostring(err))
+
+    end
+
+end
+
+ 
+-- === UI SETUP ===
+
+ lib.makebutton("Search Word", main, function()
+
     copyword(true)
+
 end)
 
+lib.makebutton("Clear Memory", main, function()
+
+    sessionUsedWords = {}
+
+    lib.updatelabel("Memory Cleared", labelword)
+
+end)
+
+ 
 local autocopy = false
 
+ 
 lib.maketoggle("Auto Search", main, function(bool)
 
     autocopy = bool
 
+ 
+    if bool then
+
+        sessionUsedWords = {}
+
+    end
+
+ 
     while autocopy do
 
         task.wait(.1)
 
         pcall(function()
+
             copyword()
+
         end)
+
     end
+
 end)
 
-labelword =
-lib.makelabel("Word", main)
+ 
+labelword = lib.makelabel("Word", main)
 
+ 
+print("[STARTUP] Script fully loaded!")
+
+ 
 lib.ondestroyedfunc = function()
+
     autocopy = false
+
 end
